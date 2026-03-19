@@ -26,12 +26,16 @@ class Vision:
 
     def get_frame(self) -> np.ndarray:
         # For simplicity, we skip MJPEG streaming and just poll shot.jpg.
-        r = self.session.get(self.shot_url, timeout=5)
-        r.raise_for_status()
-        img = cv2.imdecode(np.frombuffer(r.content, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            logger.error("Failed to decode JPEG frame from %s", self.shot_url)
-        return img
+        try:
+            r = self.session.get(self.shot_url, timeout=1)
+            r.raise_for_status()
+            img = cv2.imdecode(np.frombuffer(r.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                logger.error("Failed to decode JPEG frame from %s", self.shot_url)
+            return img
+        except Exception as e:
+            logger.error("Error fetching frame from %s: %s", self.shot_url, e)
+            return np.zeros((480, 640, 3), dtype=np.uint8)  # Return black frame on error
     
     def detect_markers(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -50,5 +54,4 @@ class Vision:
         corners, ids, _ = self.detector.detectMarkers(gray)
         if ids is not None:
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-            # print("Detected ids:", ids.flatten().tolist())
         return frame

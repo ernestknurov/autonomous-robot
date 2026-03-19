@@ -5,7 +5,7 @@ import queue
 from pynput import keyboard
 
 # ESP32 Configuration
-ESP32_IP = "192.168.0.183"  # Change this to your ESP32's IP address (check Serial Monitor)
+ESP32_IP = "192.168.0.183" 
 ESP32_PORT = 8080
 TIMEOUT_S = 0.5
 
@@ -18,7 +18,6 @@ TURN_TIMEOUT_S = 20.0
 SPEED_MPS = 2.0          # meters per second for MOVE mapping
 ANGULAR_SPEED_DPS = 40.0 # degrees per second for TURN mapping
 
-# If you want some minimal movement even for very short taps
 MIN_HOLD_S = 0.03  # ignore super-short noise taps
 
 def clamp(x: float, lo: float, hi: float) -> float:

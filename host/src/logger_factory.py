@@ -1,17 +1,3 @@
-"""Simple logger factory for the autonomous-robot host code.
-
-The factory returns a `logging.Logger` instance configured with a
-stream handler and, optionally, a file handler.  This keeps setup
-centralised and avoids the repeated `basicConfig` calls scattered
-throughout the project.
-
-Usage example::
-
-    from host.logger_factory import get_logger
-
-    logger = get_logger(__name__, log_file="robot.log")
-    logger.info("starting up")
-"""
 from __future__ import annotations
 
 import logging

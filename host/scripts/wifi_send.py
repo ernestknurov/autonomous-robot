@@ -1,19 +1,8 @@
-#!/usr/bin/env python3
-"""
-WiFi TCP client for ESP32 robot control.
-Replace the Bluetooth serial communication with TCP socket communication.
-"""
 import socket
 import time
-# Initializing WiFi...
-# Connecting to WiFi.
-# WiFi connected!
-# IP address: 192.168.0.183
-# TCP server started on port 8080
-# ESP32 Robot Ready!
 
 # ESP32 Configuration
-ESP32_IP = "192.168.0.183"  # Change this to your ESP32's IP address (check Serial Monitor)
+ESP32_IP = "192.168.0.183"
 ESP32_PORT = 8080
 TIMEOUT_S = 0.5
 

@@ -1,12 +1,12 @@
 import cv2
 
-# Выбери словарь маркеров: DICT_4X4_50, DICT_5X5_100, DICT_6X6_250, DICT_ARUCO_ORIGINAL и т.д.
+# Choose marker's dictionary: DICT_4X4_50, DICT_5X5_100, DICT_6X6_250, DICT_ARUCO_ORIGINAL и т.д.
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
-# Параметры детектора (можно тюнить)
+# Parameters for the detector (can be tuned)
 params = cv2.aruco.DetectorParameters()
 
-# Новый API (OpenCV 4.7+): Detector
+# New API (OpenCV 4.7+): Detector
 detector = cv2.aruco.ArucoDetector(aruco_dict, params)
 
 cap = cv2.VideoCapture(0)
@@ -21,10 +21,10 @@ while True:
     corners, ids, rejected = detector.detectMarkers(gray)
 
     if ids is not None:
-        # Рисуем рамки и id
+        # Draw detected markers on the frame
         cv2.aruco.drawDetectedMarkers(frame, corners, ids)
 
-        # Пример: вывести id в консоль
+        # Example: print ids to console
         print("Corners:", corners)
         print("Rejected:", rejected)
         print("Detected ids:", ids)

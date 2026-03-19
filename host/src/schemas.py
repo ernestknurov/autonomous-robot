@@ -10,13 +10,14 @@ class RobotState(enum.Enum):
     APPROACH = "approach"
     AVOID = "avoid"
     LOST_TARGET = "lost_target"
+    FINISHED = "finished"
 
 
 @dataclass
 class MarkerDetection:
     visible: bool
-    # x_offset: float = 0.0
-    # area: float = 0.0
+    x_offset: float = 0.0
+    area: float = 0.0
     corners: Optional[np.ndarray] = None  # shape (4, 2) if detected
     marker_id: Optional[int] = None
 

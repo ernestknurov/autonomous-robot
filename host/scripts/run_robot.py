@@ -12,12 +12,12 @@ def main() -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(5.0)
     sock.connect((ESP32_IP, ESP32_PORT))
-    logger.info("Connected!")
+    logger.info("[MAIN] Connected to Robot!")
 
     # Wait for READY message
     sock.settimeout(2.0)
     data = sock.recv(1024).decode(errors="ignore")
-    logger.info("Received: %s", data.strip())
+    logger.info("[MAIN] Received status: %s", data.strip())
 
     # Vision system instance
     vision = Vision(VISION_BASE_URL)
@@ -33,7 +33,7 @@ def main() -> None:
     except KeyboardInterrupt:
         robot.stop()
         sock.close()
-        logger.info("Connection closed.")
+        logger.info("[MAIN] Connection closed.")
 
 
 if __name__ == "__main__":

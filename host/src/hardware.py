@@ -1,11 +1,12 @@
-import socket
-import time
 import re
-from dataclasses import asdict
-from src.schemas import SensorSnapshot, MarkerDetection
+import cv2
+import time
+import socket
+import numpy as np
 from src.vision import Vision
 from src.logger_factory import get_logger
-from src.config import TIMEOUT_S, MAX_MOVE_M, MAX_TURN_DEG     
+from src.schemas import SensorSnapshot, MarkerDetection
+from src.config import VISION_RESOLUTION, MAX_MOVE_M, MAX_TURN_DEG     
 
 logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="DEBUG")
 
@@ -24,36 +25,52 @@ class RobotHardware:
         Return the current snapshot:
         - distance to obstacle
         - result of ArUco / YOLO detection
+        Note: for now we allow only one Aruco marker to be detected.
         """
-        frame = self.vision.get_frame()
         # Shapes:
-        # corners: (N, 4, 2). Each detection has 4 corners with (x, y) coordinates.
+        # bbox: (N, 4, 2). Each detection has a bounding box with 4 corners and (x, y) coordinates.
         # ids: (N, 1). Each detection has an integer ID.
-        corners, ids = self.vision.detect_markers(frame)
+        frame = self.vision.get_frame()
+        bbox, ids = self.vision.detect_markers(frame)
+
+        marker_found = ids is not None and len(ids) > 0
+        x_offset, area = 0.0, 0.0
+        corners, marker_id = None, None
+
+        if marker_found:
+            corners = bbox[0]  # shape (4, 2)
+            marker_id = int(ids[0][0])
+            marker_center_x = np.mean(corners[:, 0])  # Average x of the 4 corners
+            image_center_x = VISION_RESOLUTION[0] / 2
+            x_offset = (marker_center_x - image_center_x) / image_center_x  # Normalize to [-1, 1]
+            area = cv2.contourArea(corners[0]) / (VISION_RESOLUTION[0] * VISION_RESOLUTION[1])  # Relative area
+
         distance_to_obstacle = self.get_distance()
 
         snapshot = SensorSnapshot(
             obstacle_distance_cm=distance_to_obstacle,
             marker=MarkerDetection(
-                visible=ids is not None and len(ids) > 0,
-                corners=corners[0] if len(corners) > 0 else None,
-                marker_id=int(ids[0][0]) if ids is not None and len(ids) > 0 else None
+                visible=marker_found,
+                x_offset=x_offset,
+                area=area,
+                corners=corners,
+                marker_id=marker_id
             )
         )
-        logger.debug("Sensor snapshot: %s", asdict(snapshot))
+        logger.debug(f"[HARDWARE] Sensor snapshot: marker_id = {marker_id}, x_offset = {x_offset:<10.3f}, area = {area:<10.5f}, distance = {distance_to_obstacle:<10.3f} cm")
         return snapshot
 
     def get_distance(self) -> float:
         # Get response like "DISTANCE 23.5\nDONE\n"
         response = self.send_and_wait_done("GET_DISTANCE", timeout_s=3.0)
         if not response:
-            logger.error("No response for GET_DISTANCE command")
+            logger.error("[HARDWARE] No response for GET_DISTANCE command")
             return float('inf')
         
         # Get the value after "DISTANCE " and before the next newline
         m = re.search(r'DISTANCE\s+([0-9.]+)', response)
         if not m:
-            logger.error("Distance pattern not found in response: %s", response)
+            logger.error("[HARDWARE] Distance pattern not found in response: %s", response)
             return float('inf')
         
         distance = float(m.group(1))
@@ -114,4 +131,4 @@ class RobotHardware:
             except socket.timeout:
                 continue
         
-        logger.error("Timed out waiting DONE for command: %s. Last response: %s", cmd, response)
+        logger.error("[HARDWARE] Timed out waiting DONE for command: %s. Last response: %s", cmd, response)
