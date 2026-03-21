@@ -6,7 +6,7 @@ import numpy as np
 from src.vision import Vision
 from src.logger_factory import get_logger
 from src.schemas import SensorSnapshot, MarkerDetection
-from src.config import VISION_RESOLUTION, MAX_MOVE_M, MAX_TURN_DEG     
+from src.config import VISION_RESOLUTION, MAX_MOVE_M, MAX_TURN_DEG, DEFAULT_COMMAND_TIMEOUT_S, GET_DISTANCE_TIMEOUT_S     
 
 logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="DEBUG")
 
@@ -62,7 +62,7 @@ class RobotHardware:
 
     def get_distance(self) -> float:
         # Get response like "DISTANCE 23.5\nDONE\n"
-        response = self.send_and_wait_done("GET_DISTANCE", timeout_s=3.0)
+        response = self.send_and_wait_done("GET_DISTANCE", timeout_s=GET_DISTANCE_TIMEOUT_S)
         if not response:
             logger.error("[HARDWARE] No response for GET_DISTANCE command")
             return float('inf')
@@ -76,22 +76,22 @@ class RobotHardware:
         distance = float(m.group(1))
         return distance
     
-    def move_forward(self, distance: float = 0.3, timeout_s: float = 20.0) -> str | None:
+    def move_forward(self, distance: float = 0.3, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         distance = self.clip(distance, 0.0, MAX_MOVE_M)
         response = self.send_and_wait_done(f"MOVE {distance:.2f}", timeout_s=timeout_s)
         return response
 
-    def move_backward(self, distance: float = 0.3, timeout_s: float = 20.0) -> str | None:
+    def move_backward(self, distance: float = 0.3, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         distance = self.clip(distance, 0.0, MAX_MOVE_M)
         response = self.send_and_wait_done(f"MOVE {-distance:.2f}", timeout_s=timeout_s)
         return response
 
-    def turn_left(self, degrees: int = 90, timeout_s: float = 20.0) -> str | None:
+    def turn_left(self, degrees: int = 90, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         degrees = self.clip(degrees, 0, MAX_TURN_DEG)
         response = self.send_and_wait_done(f"TURN {-degrees}", timeout_s=timeout_s)
         return response
 
-    def turn_right(self, degrees: int = 90, timeout_s: float = 20.0) -> str | None:
+    def turn_right(self, degrees: int = 90, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         degrees = self.clip(degrees, 0, MAX_TURN_DEG)
         response = self.send_and_wait_done(f"TURN {degrees}", timeout_s=timeout_s)
         return response
@@ -103,7 +103,7 @@ class RobotHardware:
     def clip(self, x: float, lo: float, hi: float) -> float:
         return max(lo, min(hi, x))
 
-    def send_and_wait_done(self, cmd: str, timeout_s: float = 20.0) -> str | None:
+    def send_and_wait_done(self, cmd: str, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         """Send command and wait for DONE response."""
         self.sock.sendall((cmd.strip() + "\n").encode("utf-8"))
         

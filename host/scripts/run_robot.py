@@ -31,10 +31,11 @@ def main() -> None:
     try:
         robot.run()
     except KeyboardInterrupt:
-        robot.stop()
-        sock.close()
-        logger.info("[MAIN] Connection closed.")
-
+        pass
+    
+    robot.stop()
+    sock.close()
+    logger.info("[MAIN] Connection closed.")
 
 if __name__ == "__main__":
     main()

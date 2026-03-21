@@ -32,6 +32,7 @@ class Vision:
             img = cv2.imdecode(np.frombuffer(r.content, dtype=np.uint8), cv2.IMREAD_COLOR)
             if img is None:
                 logger.error("Failed to decode JPEG frame from %s", self.shot_url)
+                return np.zeros((480, 640, 3), dtype=np.uint8)  # Return black frame on decode failure
             return img
         except Exception as e:
             logger.error("Error fetching frame from %s: %s", self.shot_url, e)

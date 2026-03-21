@@ -1,12 +1,15 @@
-from __future__ import annotations
 import time
+import pandas as pd
 
-from src.schemas import (RobotState, Memory, SensorSnapshot)
 from src.hardware import RobotHardware
 from src.logger_factory import get_logger
+from src.schemas import (
+    RobotState, Memory, SensorSnapshot, 
+    ActionHistoryItem, SubActionItem
+)
 
+DEBUG_STOP_ITERATION = 300
 logger = get_logger(__name__, log_file=f"logs/{__name__}.log")
-DEBUG_STOP_ITERATION = 200
 
 class ObjectHunterRobot:
     def __init__(self, hardware: RobotHardware) -> None:
@@ -15,45 +18,75 @@ class ObjectHunterRobot:
         self.memory = Memory()
 
         # To adjust experimentally:
-        self.obstacle_threshold_cm = 25.0
-        self.marker_center_tolerance = 0.1
-        self.marker_close_area_threshold = 0.025
+        self.obstacle_threshold_cm = 25.0 # If an obstacle is closer than this, we consider it "ahead" and need to avoid
+        self.marker_center_tolerance = 0.1 # How far from the center the marker can be (as a fraction of frame width) before we consider it "off-center" and need to turn
+        self.marker_close_area_threshold = 0.025 # How big the marker appears in the frame when we consider it "close enough" to stop at
 
-        self.default_step_distance = 1.0
-        self.small_step_distance = 0.5
+        self.default_step_distance = 1.0 # meters
+        self.small_step_distance = 0.5 # meters, used for more careful approach when the target is near
         self.default_turn_degree = 40
         self.small_turn_degree = 20
 
-        self.search_step_duration = 5.0
-        self.scan_turn_duration = 0.5
-        self.avoid_back_duration = 0.4
-        self.avoid_turn_duration = 0.7
-        self.lost_target_timeout = 7.0
-        self.between_actions_delay = 0.5
+        self.search_step_duration = 5.0 # How long to keep moving forward in SEARCH before doing a SCAN
+        self.lost_target_timeout = 7.0 # How long to stay in LOST_TARGET state before giving up and going back to SEARCH
+        self.between_actions_delay = 0.25 # Small delay between actions to avoid overwhelming the hardware with commands
 
         self._running = False
         self._finished = False
+
+        # Stats
         self._iteration_count = 0
+        self._execution_time = []
+
+    def save_execution_time_stats(self, save_path: str) -> None:
+        time_stats = pd.DataFrame(self._execution_time)
+        time_stats.to_csv(save_path, index=False)
 
     def run(self) -> None:
         self._running = True
         logger.info("[ROBOT] Robot started")
 
         while self._running and not self._finished:
+            iteration_start_time = time.time()
+
             if DEBUG_STOP_ITERATION and self._iteration_count >= DEBUG_STOP_ITERATION:
                 logger.info("[ROBOT] Reached debug stop iteration limit (%d), stopping robot", DEBUG_STOP_ITERATION)
                 self.stop()
                 break
+
+            read_sensors_start_time = time.time()
             snapshot = self.hw.read_sensors()
+            read_sensors_end_time = time.time()
+            
+            update_state_start_time = time.time()
             self._update_state(snapshot)
+            update_state_end_time = time.time()
+
+            execute_state_start_time = time.time()
             self._execute_state(snapshot)
+            execute_state_end_time = time.time()
+
             self._iteration_count += 1
             time.sleep(self.between_actions_delay)
+            iteration_end_time = time.time()
+
+            self._execution_time.append({
+                "iteration": self._iteration_count,
+                "read_sensors": read_sensors_end_time - read_sensors_start_time,
+                "update_state": update_state_end_time - update_state_start_time,
+                "execute_state": execute_state_end_time - execute_state_start_time,
+                "total_iteration": iteration_end_time - iteration_start_time
+            })
+            logger.info(f"[ROBOT] Iteration {self._iteration_count} completed in {iteration_end_time - iteration_start_time:.2f} seconds (read_sensors: {read_sensors_end_time - read_sensors_start_time:.2f}, update_state: {update_state_end_time - update_state_start_time:.2f}, execute_state: {execute_state_end_time - execute_state_start_time:.2f})")
+
         logger.info("[ROBOT] Robot run loop exited. Finished: %s, Iterations: %d", self._finished, self._iteration_count)
 
     def stop(self) -> None:
         self._running = False
         self.hw.stop()
+        current_time = time.strftime("%Y-%m-%d_%H:%M:%S")   
+        self.save_execution_time_stats(f"logs/time_stats/stats_{current_time}.csv")
+        self.memory.save_action_history(f"logs/action_history/history_{current_time}.json")
         logger.info("[ROBOT] Robot stopped")
 
     def _set_state(self, new_state: RobotState) -> None:
@@ -124,6 +157,9 @@ class ObjectHunterRobot:
         - then transition to scan
         """
         logger.debug("[ROBOT] Current state: SEARCH")
+        action = ActionHistoryItem(state=self.state, sensor_snapshot=snapshot, iteration=self._iteration_count)
+
+        # 1. Check for obstacles and adjust step distance if needed
         distance_to_obstacle = snapshot.obstacle_distance_cm
         distance_to_pass = self.default_step_distance
         if distance_to_obstacle is not None:
@@ -132,8 +168,16 @@ class ObjectHunterRobot:
                 logger.debug("[SEARCH] Obstacle too close at %.1f cm, not moving forward", distance_to_obstacle)
                 return
             distance_to_pass = min(self.default_step_distance, safe_distance_to_pass)
+
+        # 2. Move forward
+        sub_action = SubActionItem(name="move_forward", parameters={"distance": distance_to_pass})
         self.hw.move_forward(distance=distance_to_pass)
+        sub_action.log_time()
+
         self.memory.repeated_forward_steps += 1
+        action.sub_actions.append(sub_action)
+        action.log_time()
+        self.memory.action_history.append(action)
 
     def _handle_scan(self, snapshot: SensorSnapshot) -> None:
         """
@@ -144,30 +188,39 @@ class ObjectHunterRobot:
         - turn left/right/center in sequence
         """
         logger.debug("SCAN")
-        self.hw.stop()
+        action = ActionHistoryItem(state=self.state, sensor_snapshot=snapshot, iteration=self._iteration_count)
 
         # Scan logic
         # 0 -> left, 1 -> right, 2 -> center/finish
         if self.memory.last_scan_direction == 0:
+            sub_action = SubActionItem(name="turn_left", parameters={"degrees": self.default_turn_degree})
             self.hw.turn_left(degrees=self.default_turn_degree)
-            time.sleep(self.scan_turn_duration)
-            self.hw.stop()
+            sub_action.log_time()
             self.memory.last_scan_direction = 1
+            action.sub_actions.append(sub_action)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
         if self.memory.last_scan_direction == 1:
+            sub_action = SubActionItem(name="turn_right", parameters={"degrees": self.default_turn_degree * 1.5})
             self.hw.turn_right(degrees=self.default_turn_degree * 1.5) # 1.5 instead of 2 to adjust for overshoot
-            time.sleep(self.scan_turn_duration)
-            self.hw.stop()
+            sub_action.log_time()
             self.memory.last_scan_direction = 2
+            action.sub_actions.append(sub_action)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
         # Finish scan, return to original orientation if needed, and go back to SEARCH
+        sub_action = SubActionItem(name="turn_left", parameters={"degrees": self.default_turn_degree})
         self.hw.turn_left(degrees=self.default_turn_degree)
-        time.sleep(self.scan_turn_duration)
-        self.hw.stop()
+        sub_action.log_time()
         self.memory.last_scan_direction = 0
         self._set_state(RobotState.SEARCH)
+        action.sub_actions.append(sub_action)
+        action.log_time()
+        self.memory.action_history.append(action)
 
     def _handle_approach(self, snapshot: SensorSnapshot) -> None:
         """
@@ -177,37 +230,58 @@ class ObjectHunterRobot:
         - if it's very close, we can stop
         """
         logger.debug("[ROBOT] APPROACH")
+        action = ActionHistoryItem(state=self.state, sensor_snapshot=snapshot, iteration=self._iteration_count)
         marker = snapshot.marker
 
         if not marker.visible:
             self._set_state(RobotState.LOST_TARGET)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
         x_offset = marker.x_offset
 
+        # Faster approach when the marker is far, slower when it's closer for better precision
         if marker.area <= self.marker_close_area_threshold / 4:
+            sub_action = SubActionItem(name="move_forward", parameters={"distance": self.default_step_distance})
             self.hw.move_forward(distance=self.default_step_distance)
+            sub_action.log_time()
+            action.sub_actions.append(sub_action)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
 
         if abs(x_offset) > self.marker_center_tolerance:
             if x_offset < 0:
                 # image is upside down, so negative x means target is on the right
+                sub_action = SubActionItem(name="turn_right", parameters={"degrees": self.small_turn_degree})
                 self.hw.turn_right(degrees=self.small_turn_degree)
             else:
+                sub_action = SubActionItem(name="turn_left", parameters={"degrees": self.small_turn_degree})
                 self.hw.turn_left(degrees=self.small_turn_degree)
+            sub_action.log_time()
+            action.sub_actions.append(sub_action)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
         if marker.area >= self.marker_close_area_threshold:
             logger.info("[ROBOT] Target reached")
-            # self.hw.stop()
+            action.log_time()
+            self.memory.action_history.append(action)
             # after reaching the target, we could:
             # - make a sound or light signal
             # - consider the task done and stop the robot
             # - start looking for the next marker
             return
 
+        sub_action = SubActionItem(name="move_forward", parameters={"distance": self.small_step_distance})
         self.hw.move_forward(distance=self.small_step_distance)
+        sub_action.log_time()
+        action.sub_actions.append(sub_action)
+        action.log_time()
+        self.memory.action_history.append(action)
 
     def _handle_avoid(self, snapshot: SensorSnapshot) -> None:
         """
@@ -219,23 +293,27 @@ class ObjectHunterRobot:
         - back to SEARCH
         """
         logger.debug("[ROBOT] State: AVOID")
-        self.hw.stop()
+        action = ActionHistoryItem(state=self.state, sensor_snapshot=snapshot, iteration=self._iteration_count)
 
+        sub_action = SubActionItem(name="move_backward", parameters={"distance": self.default_step_distance})
         self.hw.move_backward(distance=self.default_step_distance)
-        time.sleep(self.avoid_back_duration)
-        self.hw.stop()
+        sub_action.log_time()
+        action.sub_actions.append(sub_action)
 
         # For now, just alternate left and right turns to try to find a clear path
         if self.memory.repeated_turns % 2 == 0:
+            sub_action = SubActionItem(name="turn_left", parameters={"degrees": self.default_turn_degree})
             self.hw.turn_left(degrees=self.default_turn_degree)
         else:
+            sub_action = SubActionItem(name="turn_right", parameters={"degrees": self.default_turn_degree})
             self.hw.turn_right(degrees=self.default_turn_degree)
-
-        time.sleep(self.avoid_turn_duration)
-        self.hw.stop()
+        sub_action.log_time()
+        action.sub_actions.append(sub_action)
 
         self.memory.repeated_turns += 1
         self._set_state(RobotState.SEARCH)
+        action.log_time()
+        self.memory.action_history.append(action)
 
     def _handle_lost_target(self, snapshot: SensorSnapshot) -> None:
         """
@@ -244,27 +322,39 @@ class ObjectHunterRobot:
         rather than immediately going into full exploration.
         """
         logger.debug("LOST_TARGET")
+        action = ActionHistoryItem(state=self.state, sensor_snapshot=snapshot, iteration=self._iteration_count)
 
         if snapshot.marker.visible:
             self.memory.remember_marker(snapshot.marker)
             self._set_state(RobotState.APPROACH)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
 
         last_x = self.memory.last_seen_marker_x
         if last_x is None:
             self._set_state(RobotState.SEARCH)
+            action.log_time()
+            self.memory.action_history.append(action)
             return
         
         # Small local search towards the last known direction of the target
         if last_x < 0:
             # image is upside down, so negative x means target was on the right
+            sub_action = SubActionItem(name="turn_right", parameters={"degrees": self.small_turn_degree})
             self.hw.turn_right(degrees=self.small_turn_degree)
         else:
+            sub_action = SubActionItem(name="turn_left", parameters={"degrees": self.small_turn_degree})
             self.hw.turn_left(degrees=self.small_turn_degree)
+        sub_action.log_time()
+        action.sub_actions.append(sub_action)
 
         # If we can't re-detect the target for too long, we go back to SEARCH
         if (time.time() - self.memory.state_enter_time) > self.lost_target_timeout:
             self._set_state(RobotState.SEARCH)
+
+        action.log_time()
+        self.memory.action_history.append(action)
 
     def _is_obstacle_ahead(self, snapshot: SensorSnapshot) -> bool:
         distance = snapshot.obstacle_distance_cm
