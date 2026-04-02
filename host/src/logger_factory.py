@@ -26,7 +26,7 @@ def get_logger(
     # configured by an earlier call.  This keeps messages from being
     # duplicated when modules import the factory repeatedly.
     if not logger.handlers:
-        fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+        fmt = logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s")
 
         stream_h = logging.StreamHandler()
         stream_h.setFormatter(fmt)

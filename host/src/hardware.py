@@ -8,7 +8,17 @@ from src.logger_factory import get_logger
 from src.schemas import SensorSnapshot, MarkerDetection
 from src.config import VISION_RESOLUTION, MAX_MOVE_M, MAX_TURN_DEG, DEFAULT_COMMAND_TIMEOUT_S, GET_DISTANCE_TIMEOUT_S     
 
-logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="DEBUG")
+logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="INFO")
+
+def measure_time(func):
+    def wrapper(self, *args, **kwargs):
+        self.last_action_start_ts = time.time()
+        result = func(self, *args, **kwargs)
+        self.last_action_end_ts = time.time()
+        logger.debug(f"[HARDWARE] {func.__name__} took {self.last_action_end_ts - self.last_action_start_ts:.3f} seconds")
+        return result
+    return wrapper
+
 
 class RobotHardware:
     """
@@ -19,6 +29,8 @@ class RobotHardware:
     def __init__(self, sock: socket.socket, vision: Vision):
         self.sock = sock
         self.vision = vision
+        self.last_action_start_ts = None
+        self.last_action_end_ts = None
 
     def read_sensors(self) -> SensorSnapshot:
         """
@@ -51,13 +63,13 @@ class RobotHardware:
             obstacle_distance_cm=distance_to_obstacle,
             marker=MarkerDetection(
                 visible=marker_found,
-                x_offset=x_offset,
-                area=area,
+                x_offset=float(x_offset),
+                area=float(area),
                 corners=corners,
                 marker_id=marker_id
             )
         )
-        logger.debug(f"[HARDWARE] Sensor snapshot: marker_id = {marker_id}, x_offset = {x_offset:<10.3f}, area = {area:<10.5f}, distance = {distance_to_obstacle:<10.3f} cm")
+        logger.debug(f"[HARDWARE] Sensor snapshot: marker_id = {marker_id}, x_offset = {x_offset:.3f}, area = {area:.5f}, distance = {distance_to_obstacle:.3f} cm")
         return snapshot
 
     def get_distance(self) -> float:
@@ -76,21 +88,25 @@ class RobotHardware:
         distance = float(m.group(1))
         return distance
     
+    @measure_time
     def move_forward(self, distance: float = 0.3, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         distance = self.clip(distance, 0.0, MAX_MOVE_M)
         response = self.send_and_wait_done(f"MOVE {distance:.2f}", timeout_s=timeout_s)
         return response
 
+    @measure_time
     def move_backward(self, distance: float = 0.3, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         distance = self.clip(distance, 0.0, MAX_MOVE_M)
         response = self.send_and_wait_done(f"MOVE {-distance:.2f}", timeout_s=timeout_s)
         return response
 
+    @measure_time
     def turn_left(self, degrees: int = 90, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         degrees = self.clip(degrees, 0, MAX_TURN_DEG)
         response = self.send_and_wait_done(f"TURN {-degrees}", timeout_s=timeout_s)
         return response
 
+    @measure_time
     def turn_right(self, degrees: int = 90, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:
         degrees = self.clip(degrees, 0, MAX_TURN_DEG)
         response = self.send_and_wait_done(f"TURN {degrees}", timeout_s=timeout_s)

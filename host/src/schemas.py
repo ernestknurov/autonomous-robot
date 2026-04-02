@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Any, Optional
 import enum
 import time
 import numpy as np
@@ -27,37 +27,73 @@ class MarkerDetection:
 class SensorSnapshot:
     obstacle_distance_cm: Optional[float]
     marker: MarkerDetection
-    # frame: Optional[np.ndarray] = None  # BGR image from camera
     timestamp: float = field(default_factory=time.time)
 
 
 @dataclass
-class SubActionItem:
-    name: str
-    parameters: dict = field(default_factory=dict)
-    start_timestamp: float = field(default_factory=time.time)
-    end_timestamp: float = field(default_factory=time.time)
-    duration: float = 0.0
+class Observation:
+    obstacle_distance_cm: Optional[float]
+    marker_visible: bool
+    marker_x_offset: Optional[float]
+    marker_area: Optional[float]
+    marker_id: Optional[int]
 
-    def log_time(self) -> None:
-        self.end_timestamp = time.time()
-        self.duration = self.end_timestamp - self.start_timestamp
+    @classmethod
+    def from_sensor_snapshot(cls, snapshot: SensorSnapshot) -> "Observation":
+        return cls(
+            obstacle_distance_cm=snapshot.obstacle_distance_cm,
+            marker_visible=snapshot.marker.visible,
+            marker_x_offset=snapshot.marker.x_offset,
+            marker_area=snapshot.marker.area,
+            marker_id=snapshot.marker.marker_id
+        )
+
+@dataclass
+class ActionCommand:
+    name: str
+    parameters: dict[str, Any]
 
 
 @dataclass
-class ActionHistoryItem:
-    iteration: int
-    state: RobotState
-    sensor_snapshot: Optional[SensorSnapshot] = None
-    sub_actions: list[SubActionItem] = field(default_factory=list)
-    start_timestamp: float = field(default_factory=time.time)
-    end_timestamp: float = field(default_factory=time.time)
-    duration: float = 0.0
+class StepTimestamps:
+    decision_start_ts: float
+    action_start_ts: Optional[float]
+    action_end_ts: Optional[float]
+    decision_end_ts: Optional[float]
 
-    def log_time(self) -> None:
-        self.end_timestamp = time.time()
-        self.duration = self.end_timestamp - self.start_timestamp
-    
+
+@dataclass
+class StepOutcome:
+    terminal: bool
+    next_state: Optional[str] = None
+
+
+@dataclass
+class TransitionRecord:
+    episode_id: str
+    iteration: int
+    state: str
+    observation: Observation
+    action: Optional[ActionCommand]
+    next_observation: Optional[Observation]
+    timestamps: StepTimestamps
+    outcome: Optional[StepOutcome]
+
+@dataclass
+class EpisodeMetadata:
+    episode_id: str
+    policy_type: str
+    started_at: Optional[float] = field(default_factory=time.time)
+    finished_at: Optional[float] = None
+
+@dataclass
+class EpisodeLog:
+    metadata: EpisodeMetadata
+    steps: list[TransitionRecord] = field(default_factory=list)
+
+    def save(self, path: str) -> None:
+        with open(path, "w") as f:
+            json.dump(asdict(self), f, indent=2)
 
 
 @dataclass
@@ -69,8 +105,7 @@ class Memory:
     last_scan_direction: int = 0
     repeated_turns: int = 0
     repeated_forward_steps: int = 0
-
-    action_history: list[ActionHistoryItem] = field(default_factory=list)
+    avoid_completed: bool = True
 
     state_enter_time: float = field(default_factory=time.time)
 
@@ -82,19 +117,3 @@ class Memory:
     def reset_repetition_counters(self) -> None:
         self.repeated_turns = 0
         self.repeated_forward_steps = 0
-
-    def save_action_history(self, save_path: str) -> None:
-        
-        def custom_encoder(obj):
-            if isinstance(obj, enum.Enum):
-                return obj.value  # Convert enum to its string value
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()  # Convert numpy array to list
-            if isinstance(obj, np.generic):
-                return obj.item()  # Convert numpy scalar types (float32, int32, etc.) to Python native
-            if hasattr(obj, '__dataclass_fields__'):
-                return asdict(obj)  # Convert dataclass to dict
-            return obj.__dict__
-        
-        with open(save_path, "w") as f:
-            json.dump(self.action_history, f, default=custom_encoder, indent=2)
