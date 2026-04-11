@@ -24,9 +24,16 @@ class MarkerDetection:
 
 
 @dataclass
+class DepthHazard:
+    blocked: bool = False
+    depth_score: float = 0.0
+
+
+@dataclass
 class SensorSnapshot:
     obstacle_distance_cm: Optional[float]
     marker: MarkerDetection
+    depth_hazard: DepthHazard = field(default_factory=DepthHazard)
     timestamp: float = field(default_factory=time.time)
 
 
@@ -37,6 +44,8 @@ class Observation:
     marker_x_offset: Optional[float]
     marker_area: Optional[float]
     marker_id: Optional[int]
+    depth_blocked: bool
+    depth_score: Optional[float]
 
     @classmethod
     def from_sensor_snapshot(cls, snapshot: SensorSnapshot) -> "Observation":
@@ -45,7 +54,9 @@ class Observation:
             marker_visible=snapshot.marker.visible,
             marker_x_offset=snapshot.marker.x_offset,
             marker_area=snapshot.marker.area,
-            marker_id=snapshot.marker.marker_id
+            marker_id=snapshot.marker.marker_id,
+            depth_blocked=snapshot.depth_hazard.blocked,
+            depth_score=snapshot.depth_hazard.depth_score
         )
 
 @dataclass

@@ -30,12 +30,13 @@ class ObjectHunterRobot:
         self.default_turn_degree = 40
         self.small_turn_degree = 20
 
-        self.search_step_duration = 5.0 # How long to keep moving forward in SEARCH before doing a SCAN
+        self.search_step_duration = 7.5 # How long to keep moving forward in SEARCH before doing a SCAN
         self.lost_target_timeout = 7.0 # How long to stay in LOST_TARGET state before giving up and going back to SEARCH
-        self.between_actions_delay = 1.0 # Small delay between actions to avoid overwhelming the hardware with commands
+        self.between_actions_delay = 1.5 # Small delay between actions to avoid overwhelming the hardware with commands
 
         self._running = False
         self._finished = False
+        self._stopped = False
 
         # Stats
         self.iteration = 0
@@ -50,43 +51,56 @@ class ObjectHunterRobot:
         logger.info("[ROBOT] Robot started")
 
         while self._running and not self._finished:
-            iteration_start_time = time.time()
-
-            if DEBUG_STOP_ITERATION and self.iteration >= DEBUG_STOP_ITERATION:
-                logger.info(f"[ROBOT] Reached debug stop iteration limit ({DEBUG_STOP_ITERATION}), stopping robot")
-                self.stop()
+            if not self.run_iteration():
                 break
-
-            read_sensors_start_time = time.time()
-            snapshot = self.hw.read_sensors()
-            read_sensors_end_time = time.time()
-            
-            update_state_start_time = time.time()
-            self._update_state(snapshot)
-            update_state_end_time = time.time()
-
-            self._log_next_state(snapshot)
-
-            execute_state_start_time = time.time()
-            self._execute_state(snapshot)
-            execute_state_end_time = time.time()
-
             time.sleep(self.between_actions_delay)
-            iteration_end_time = time.time()
-
-            self._execution_time.append({
-                "iteration": self.iteration,
-                "read_sensors": read_sensors_end_time - read_sensors_start_time,
-                "update_state": update_state_end_time - update_state_start_time,
-                "execute_state": execute_state_end_time - execute_state_start_time,
-                "total_iteration": iteration_end_time - iteration_start_time
-            })
-            logger.debug(f"[ROBOT] Iteration {self.iteration} completed in {iteration_end_time - iteration_start_time:.2f} seconds (read_sensors: {read_sensors_end_time - read_sensors_start_time:.2f}, update_state: {update_state_end_time - update_state_start_time:.2f}, execute_state: {execute_state_end_time - execute_state_start_time:.2f})")
-            self.iteration += 1
 
         logger.info(f"[ROBOT] Robot run loop exited. Finished: {self._finished}, Iterations: {self.iteration}")
 
+    def run_iteration(self) -> bool:
+        if self._finished or self._stopped:
+            return False
+
+        self._running = True
+        iteration_start_time = time.time()
+
+        if DEBUG_STOP_ITERATION and self.iteration >= DEBUG_STOP_ITERATION:
+            logger.info(f"[ROBOT] Reached debug stop iteration limit ({DEBUG_STOP_ITERATION}), stopping robot")
+            self.stop()
+            return False
+
+        read_sensors_start_time = time.time()
+        snapshot = self.hw.read_sensors()
+        read_sensors_end_time = time.time()
+
+        update_state_start_time = time.time()
+        self._update_state(snapshot)
+        update_state_end_time = time.time()
+
+        self._log_next_state(snapshot)
+
+        execute_state_start_time = time.time()
+        self._execute_state(snapshot)
+        execute_state_end_time = time.time()
+
+        iteration_end_time = time.time()
+
+        self._execution_time.append({
+            "iteration": self.iteration,
+            "read_sensors": read_sensors_end_time - read_sensors_start_time,
+            "update_state": update_state_end_time - update_state_start_time,
+            "execute_state": execute_state_end_time - execute_state_start_time,
+            "total_iteration": iteration_end_time - iteration_start_time
+        })
+        logger.debug(f"[ROBOT] Iteration {self.iteration} completed in {iteration_end_time - iteration_start_time:.2f} seconds (read_sensors: {read_sensors_end_time - read_sensors_start_time:.2f}, update_state: {update_state_end_time - update_state_start_time:.2f}, execute_state: {execute_state_end_time - execute_state_start_time:.2f})")
+        self.iteration += 1
+        return not self._finished
+
     def stop(self) -> None:
+        if self._stopped:
+            return
+
+        self._stopped = True
         self._running = False
         self.hw.stop()
         current_time = time.strftime("%Y-%m-%d_%H:%M:%S")   
@@ -157,8 +171,20 @@ class ObjectHunterRobot:
 
     def _create_log_record(self, snapshot: SensorSnapshot) -> None:
         prev_action = self.episode_log.steps[-1].action.name if len(self.episode_log.steps) > 0 else None
-        prev_iter_time = self._execution_time[-1]['total_iteration'] if len(self._execution_time) > 0 else None
-        logger.info(f"[ROBOT] ep = {self.episode_id} | iter = {self.iteration} | prev_iter_time = {prev_iter_time:.2f} | state = {self.state.value} | prev_action = {prev_action} | marker_area = {snapshot.marker.area}")
+        prev_iter_time = round(self._execution_time[-1]['total_iteration'], 2) if len(self._execution_time) > 0 else None
+
+        # Safe conversion for None values
+        time_str = f"{prev_iter_time:.1f}" if prev_iter_time is not None else "N/A"
+        action_str = prev_action if prev_action is not None else "N/A"
+        obs_str = f"{snapshot.obstacle_distance_cm:.0f}" if snapshot.obstacle_distance_cm is not None else "N/A"
+        depth_str = f"{snapshot.depth_hazard.depth_score:.3f}" if snapshot.depth_hazard.depth_score is not None else "N/A"
+
+        # logger.info(f"[ROBOT] ep = {self.episode_id} | iter = {self.iteration} | prev_iter_time = {prev_iter_time} | state = {self.state.value} | prev_action = {prev_action} | marker_area = {snapshot.marker.area} | depth_scores = (left: {snapshot.depth_hazard.left_score:.3f}, center: {snapshot.depth_hazard.center_score:.3f}, right: {snapshot.depth_hazard.right_score:.3f}) | obstacle_distance_cm = {snapshot.obstacle_distance_cm}")
+        logger.info("[ROBOT] ep=%s | iter=%d | time=%s | state=%s | action=%s | marker=%.3f | depth=%s | obs=%scm",
+            self.episode_id, self.iteration, time_str, 
+            self.state.value, action_str, snapshot.marker.area,
+            depth_str, obs_str)
+        
         self.episode_log.steps.append(TransitionRecord(
             episode_id=self.episode_id,
             iteration=self.iteration,
@@ -199,6 +225,13 @@ class ObjectHunterRobot:
         # 1. Check for obstacles and adjust step distance if needed
         distance_to_obstacle = snapshot.obstacle_distance_cm
         distance_to_pass = self.default_step_distance
+        if snapshot.depth_hazard.blocked:
+            logger.debug(
+                "[ROBOT] Depth obstacle ahead (score: %.3f), not moving forward",
+                snapshot.depth_hazard.depth_score
+            )
+            return
+
         if distance_to_obstacle is not None:
             safe_distance_to_pass = distance_to_obstacle - self.obstacle_threshold_cm
             if safe_distance_to_pass <= 0:
@@ -267,12 +300,11 @@ class ObjectHunterRobot:
 
         if abs(x_offset) > self.marker_center_tolerance:
             if x_offset < 0:
-                # image is upside down, so negative x means target is on the right
-                self.hw.turn_right(degrees=self.small_turn_degree)
-                self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": self.small_turn_degree}))
-            else:
                 self.hw.turn_left(degrees=self.small_turn_degree)
                 self._log_action(action_command=ActionCommand(name="turn_left", parameters={"degrees": self.small_turn_degree}))
+            else:
+                self.hw.turn_right(degrees=self.small_turn_degree)
+                self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": self.small_turn_degree}))
             return
 
         if marker.area >= self.marker_close_area_threshold:
@@ -303,8 +335,9 @@ class ObjectHunterRobot:
             self._log_action(action_command=ActionCommand(name="move_backward", parameters={"distance": self.default_step_distance}))
             return
 
-        # For now, just alternate left and right turns to try to find a clear path
-        if self.memory.repeated_turns % 2 == 0:
+        turn_direction = "left" if self.memory.repeated_turns % 2 == 0 else "right"
+
+        if turn_direction == "left":
             self.hw.turn_left(degrees=self.default_turn_degree)
             self._log_action(action_command=ActionCommand(name="turn_left", parameters={"degrees": self.default_turn_degree}))
         else:
@@ -335,12 +368,11 @@ class ObjectHunterRobot:
         
         # Small local search towards the last known direction of the target
         if last_x < 0:
-            # image is upside down, so negative x means target was on the right
-            self.hw.turn_right(degrees=self.small_turn_degree)
-            self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": self.small_turn_degree}))
-        else:
             self.hw.turn_left(degrees=self.small_turn_degree)
             self._log_action(action_command=ActionCommand(name="turn_left", parameters={"degrees": self.small_turn_degree}))
+        else:
+            self.hw.turn_right(degrees=self.small_turn_degree)
+            self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": self.small_turn_degree}))
 
         # If we can't re-detect the target for too long, we go back to SEARCH
         if (time.time() - self.memory.state_enter_time) > self.lost_target_timeout:
@@ -348,9 +380,8 @@ class ObjectHunterRobot:
 
     def _is_obstacle_ahead(self, snapshot: SensorSnapshot) -> bool:
         distance = snapshot.obstacle_distance_cm
-        if distance is None:
-            return False
-        return distance < self.obstacle_threshold_cm
+        distance_blocked = distance is not None and distance < self.obstacle_threshold_cm
+        return distance_blocked or snapshot.depth_hazard.blocked
 
     def _recently_saw_marker(self) -> bool:
         if self.memory.last_seen_marker_time is None:

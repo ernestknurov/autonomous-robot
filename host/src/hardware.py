@@ -58,6 +58,7 @@ class RobotHardware:
             area = cv2.contourArea(corners[0]) / (VISION_RESOLUTION[0] * VISION_RESOLUTION[1])  # Relative area
 
         distance_to_obstacle = self.get_distance()
+        depth_hazard = self.vision.estimate_depth_hazard(frame)
 
         snapshot = SensorSnapshot(
             obstacle_distance_cm=distance_to_obstacle,
@@ -67,9 +68,18 @@ class RobotHardware:
                 area=float(area),
                 corners=corners,
                 marker_id=marker_id
-            )
+            ),
+            depth_hazard=depth_hazard,
         )
-        logger.debug(f"[HARDWARE] Sensor snapshot: marker_id = {marker_id}, x_offset = {x_offset:.3f}, area = {area:.5f}, distance = {distance_to_obstacle:.3f} cm")
+        logger.debug(
+            "[HARDWARE] Sensor snapshot: marker_id = %s, x_offset = %.3f, area = %.5f, distance = %.3f cm, depth_blocked = %s, depth_scores = (%.3f, %.3f, %.3f)",
+            marker_id,
+            x_offset,
+            area,
+            distance_to_obstacle,
+            depth_hazard.blocked,
+            depth_hazard.depth_score
+        )
         return snapshot
 
     def get_distance(self) -> float:
