@@ -6,7 +6,7 @@ An autonomous mobile robot that uses computer vision to detect visual markers (A
 
 This project demonstrates a distributed robotics system where:
 - **ESP32 microcontroller**: Manages motor control, distance sensing, and WiFi communication
-- **Host computer**: Runs computer vision analysis, target detection, and navigation logic
+- **Host computer**: Runs ArUco detection, depth hazard estimation, and navigation logic
 - **IP Webcam**: Provides real-time video feed from an Android phone (using IPWebcam app)
 
 The robot autonomously searches for visual markers, approaches them while avoiding obstacles, and executes commands received from the host computer.
@@ -58,7 +58,11 @@ The robot autonomously searches for visual markers, approaches them while avoidi
 - **IP Webcam** (Android phone with IPWebcam app)
   - Provides MJPEG stream and individual frame snapshots via HTTP
   - Wireless connection on home network
-  - Transmits video to host computer for ArUco marker detection
+  - Transmits video to host computer for ArUco marker detection and depth hazard estimation
+
+Example depth hazard visualization:
+
+![Depth Estimation Example](assets/images/depth_estimation_2.png)
 
 ### Wiring Diagram
 ```
@@ -88,8 +92,9 @@ HC-SR04 Ultrasonic Sensor
 IP Webcam (WiFi)
     ↓ (HTTP)
 Host Computer (Python)
-    ├─ Vision: ArUco Detection
+    ├─ Vision: ArUco + Depth Hazard Estimation
     ├─ Navigation Logic: Target approach, obstacle avoidance
+    ├─ Structured log collection for offline analysis/training
     └─ WiFi (TCP client)
         ↓ (Commands: MOVE, TURN, GET_DISTANCE)
 ESP32 Microcontroller (WiFi server)
@@ -148,18 +153,20 @@ Each command is fully executed before the next one is accepted. The socket is cl
 **Directory**: `host/src/`
 
 - `robot.py` - Main robot logic with state machine (SEARCH, SCAN, APPROACH, AVOID, LOST_TARGET, FINISHED)
-- `hardware.py` - Abstraction layer: sensor reading, motor commands via WiFi
-- `vision.py` - ArUco marker detection using OpenCV
-- `schemas.py` - Data structures (RobotState, SensorSnapshot, MarkerDetection)
-- `config.py` - Configuration parameters (WiFi address, vision resolution)
-- `logger_factory.py` - Logging utilities
+- `hardware.py` - Sensor fusion (ultrasonic + depth hazard), motor commands via WiFi
+- `vision.py` - ArUco detection + MiDaS depth estimation + hazard analysis
+- `schemas.py` - Data structures for snapshots and transition records used in offline analysis/training
+- `config.py` - WiFi, vision, and depth-hazard configuration
+- `logger_factory.py` - Shared console/file logger factory (auto-creates log dirs, avoids duplicate handlers)
 
 **Scripts** (`host/scripts/`):
 - `detect_aruco_realtime.py` - Test ArUco detection with live camera feed
 - `run_robot.py` - Main entry point for autonomous operation
 - `teleop_keyboard_wifi.py` - Manual robot control via keyboard
-- `vision_script.py` - Standalone vision testing
+- `vision_script.py` - Depth hazard visualization (ROI, mask, blocked/clear overlay)
 - `wifi_send.py` - Low-level WiFi command testing
+- `preprocess_logs.py` - Convert episode JSON logs into tabular CSV
+- `extract_quality_metrics.py` - Compute quality metrics from processed episode logs
 
 ## Navigation Logic
 
@@ -171,7 +178,7 @@ The robot uses a finite state machine to autonomously navigate:
 
 3. **APPROACH** - Marker is visible. The robot centers the marker in the camera frame by adjusting heading (turning), then moves forward toward it. Continues until the marker fills enough of the frame (reaches area threshold).
 
-4. **AVOID** - Obstacle detected within safety threshold. Robot backs up, turns left or right alternately to find a clear path, then returns to SEARCH.
+4. **AVOID** - Obstacle detected from ultrasonic distance and/or depth hazard score. Robot backs up, turns left or right alternately to find a clear path, then returns to SEARCH.
 
 5. **LOST_TARGET** - Marker was recently seen but is now out of view. Instead of full exploration, the robot makes small turns in the direction the marker was last seen, searching for it locally. If the marker isn't re-detected within a timeout, it returns to SEARCH.
 
@@ -181,10 +188,11 @@ State transitions are checked every iteration based on current sensor data (mark
 
 The host computer continuously:
 - Reads camera frames and detects ArUco markers
+- Estimates depth hazard inside a configurable area of interest
 - Queries ultrasonic distance from ESP32
 - Evaluates state transitions
 - Executes appropriate motor commands
-- Logs all sensor data and state transitions
+- Collects structured logs (observations, transitions, actions, outcomes, timings) for offline analysis and training
 
 ## Project Structure
 
@@ -206,19 +214,24 @@ autonomous-robot/
 │   ├── src/
 │   │   ├── robot.py               # Main robot state machine
 │   │   ├── hardware.py            # Sensor & motor abstraction
-│   │   ├── vision.py              # OpenCV ArUco detection
-│   │   ├── schemas.py             # Data structures
-│   │   ├── config.py              # Configuration
+│   │   ├── vision.py              # ArUco + depth hazard estimation
+│   │   ├── schemas.py             # Data structures + episode logs
+│   │   ├── config.py              # Runtime configuration
 │   │   └── logger_factory.py      # Logging setup
 │   └── scripts/
 │       ├── run_robot.py           # Main entry point
 │       ├── teleop_keyboard_wifi.py # Manual control
 │       ├── detect_aruco_realtime.py # Vision testing
+│       ├── vision_script.py       # Depth debug visualization
+│       ├── preprocess_logs.py     # Convert JSON logs to CSV
+│       ├── extract_quality_metrics.py # Episode quality metrics
 │       └── ...
 │
 ├── assets/                        # Project assets
 │   └── images/
-│       └── robot.jpg
+│       ├── robot.jpg
+│       ├── depth_estimation_1.png
+│       └── depth_estimation_2.png
 └── aruco_markers/                 # ArUco marker generation
 ```
 
@@ -238,9 +251,10 @@ autonomous-robot/
 
 **Software**:
 - PlatformIO CLI or VS Code with PlatformIO extension
-- Python 3.8+
+- Python 3.13+
 - OpenCV (`cv2`)
 - Requests library
+- PyTorch (required by MiDaS depth estimation)
 
 ### Setup
 
@@ -255,9 +269,13 @@ platformio run --target upload
 
 Edit `host/src/config.py`:
 ```python
-ESP32_HOST = "192.168.1.100"  # Your ESP32's IP
-ESP32_PORT = 5555              # Port from config.h
-VISION_URL = "http://192.168.1.50:8080"  # IPWebcam address
+ESP32_IP = "192.168.0.183"
+ESP32_PORT = 8080
+VISION_BASE_URL = "http://192.168.0.139:8080/"
+DEPTH_ESTIMATOR_MODEL_TYPE = "DPT_Hybrid"
+DEPTH_ESTIMATION_BLOCKED_THRESHOLD = 0.4
+AREA_OF_INTEREST = (0.15, 0.85, 0.15, 0.85)  # x0, x1, y0, y1 (ratios)
+CLOSE_WIRING_MASK = (0.55, 0.40)             # y_start, x_end (ratios)
 ```
 
 #### 3. Install Python Dependencies
@@ -274,11 +292,18 @@ cd host
 uv run python -m scripts.run_robot
 ```
 
+First start can take longer because MiDaS model weights are downloaded.
+
 ## Testing
 
 ### Test Vision Detection
 ```bash
 uv run python scripts/detect_aruco_realtime.py
+```
+
+### Visualize Depth Hazard / ROI
+```bash
+uv run python scripts/vision_script.py
 ```
 
 ### Manual Robot Control
@@ -301,6 +326,24 @@ Key tunable parameters in `host/src/robot.py`:
 - `default_step_distance` - Movement distance per action (default: 1.0 m)
 - `default_turn_degree` - Rotation angle per action (default: 40°)
 
+Depth estimator and hazard parameters in `host/src/config.py`:
+
+- `DEPTH_ESTIMATOR_MODEL_TYPE` - MiDaS model variant (`DPT_Hybrid` default, `DPT_Large` for higher quality/slower inference)
+- `DEPTH_ESTIMATION_BLOCKED_THRESHOLD` - Threshold on ROI q90 depth score to mark path as blocked
+- `AREA_OF_INTEREST` - Region used to compute depth hazard
+- `CLOSE_WIRING_MASK` - Masked camera artifact region excluded from hazard scoring
+
+Logging outputs:
+
+- `host/logs/src.*.log` - Runtime module logs (`run_robot`, `robot`, `hardware`, `vision`, ...)
+- `host/logs/episode_logs/*.json` - Structured episode transitions (state, observation, action, outcome, timestamps)
+- `host/logs/time_stats/*.csv` - Per-iteration timing breakdowns (`read_sensors`, `update_state`, `execute_state`, total)
+
+Offline log-processing pipeline:
+
+- `host/scripts/preprocess_logs.py` converts episode JSON logs into tabular CSV.
+- `host/scripts/extract_quality_metrics.py` computes aggregate quality metrics from processed logs.
+
 ## Troubleshooting
 
 ### ESP32 Not Connecting to WiFi
@@ -314,6 +357,12 @@ Key tunable parameters in `host/src/robot.py`:
 - Check that ArUco markers are well-lit and clearly visible
 - Test with `detect_aruco_realtime.py` script
 
+### Depth Estimation Is Slow or Not Stable
+- Use `DEPTH_ESTIMATOR_MODEL_TYPE = "DPT_Hybrid"` for faster inference
+- If CUDA runs out of memory, runtime falls back to CPU automatically
+- Tune `AREA_OF_INTEREST` and `CLOSE_WIRING_MASK` to match your camera mounting/wiring
+- Inspect overlay in `vision_script.py` to verify blocked/clear behavior
+
 ### Robot Not Responding to Commands
 - Verify WiFi connection: ping ESP32
 - Check serial monitor for error messages
@@ -324,4 +373,5 @@ Key tunable parameters in `host/src/robot.py`:
 - Motor movements are non-blocking; timing is managed via timers
 - All distances in meters, all angles in degrees
 - Vision coordinates normalized to [-1, 1] for marker offset
-- Logging to `host/logs/` directory for debugging
+- Obstacle gating combines ultrasonic thresholding with depth hazard score
+- Logging system writes both human-readable module logs and machine-readable episode/timing artifacts
