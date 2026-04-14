@@ -1,5 +1,6 @@
 import time
 import pandas as pd
+import numpy as np
 
 from src.hardware import RobotHardware
 from src.logger_factory import get_logger
@@ -27,7 +28,7 @@ class ObjectHunterRobot:
 
         self.default_step_distance = 1.0 # meters
         self.small_step_distance = 0.5 # meters, used for more careful approach when the target is near
-        self.default_turn_degree = 40
+        self.default_turn_degree = 60
         self.small_turn_degree = 20
 
         self.search_step_duration = 7.5 # How long to keep moving forward in SEARCH before doing a SCAN
@@ -123,6 +124,9 @@ class ObjectHunterRobot:
         """
         marker = snapshot.marker
         obstacle_ahead = self._is_obstacle_ahead(snapshot)
+        robot_stuck = self.is_robot_stuck()
+        if robot_stuck:
+            logger.warning("[ROBOT] Robot appears to be stuck based on recent sensor readings")
 
         if marker.visible:
             logger.debug("[ROBOT] Marker detected!")
@@ -134,7 +138,7 @@ class ObjectHunterRobot:
                 self._set_state(RobotState.APPROACH)
             return
 
-        if obstacle_ahead or not self.memory.avoid_completed:
+        if obstacle_ahead or not self.memory.avoid_completed or robot_stuck:
             self._set_state(RobotState.AVOID)
             return
 
@@ -168,6 +172,26 @@ class ObjectHunterRobot:
             self.stop()
         else:
             logger.warning("[ROBOT] Unknown state: %s", self.state)
+
+    def is_robot_stuck(self, n: int = 3, tolerance: float = 0.03) -> bool:
+        """
+        Robot is stuck when:
+        - deviations from last n observation from dist and depth both are less than tolerance
+        - Dist is not active and Depth deviation is less than tolerance and vice versa
+        """
+        last_n_dist = [rec.observation.obstacle_distance_cm for rec in self.episode_log.steps if rec.observation.obstacle_distance_cm is not None][-n:]
+        last_n_depth = [rec.observation.depth_score for rec in self.episode_log.steps if rec.observation.depth_score is not None][-n:]
+        dist_active = last_n_dist and len(last_n_dist) >= n and np.mean(last_n_dist) != 999.0
+        depth_active = last_n_depth and len(last_n_depth) >= n
+        relative_deviation = lambda arr: np.std(arr) / np.mean(arr)
+        dist_deviation = relative_deviation(last_n_dist) if dist_active else np.inf
+        depth_deviation = relative_deviation(last_n_depth) if depth_active else np.inf
+        logger.debug(f"[ROBOT] Checking if stuck: dist_deviation={dist_deviation:.4f} (active: {dist_active}), depth_deviation={depth_deviation:.4f} (active: {depth_active}), tolerance={tolerance}")
+
+        robot_stuck = ((dist_deviation < tolerance) and (depth_deviation < tolerance)) or\
+                      ((depth_deviation < tolerance) and not dist_active) or\
+                      ((dist_deviation < tolerance) and not depth_active)
+        return robot_stuck
 
     def _create_log_record(self, snapshot: SensorSnapshot) -> None:
         prev_action = self.episode_log.steps[-1].action.name if len(self.episode_log.steps) > 0 else None

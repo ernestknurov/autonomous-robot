@@ -11,6 +11,6 @@ GET_DISTANCE_TIMEOUT_S = 7.0
 DEPTH_ESTIMATOR_MODEL_TYPE = "DPT_Hybrid"  # "DPT_Large" for better quality but slower inference
 VISION_BASE_URL = "http://192.168.0.139:8080/"
 VISION_RESOLUTION = (1920, 1080)
-DEPTH_ESTIMATION_BLOCKED_THRESHOLD = 0.4
+DEPTH_ESTIMATION_BLOCKED_THRESHOLD = 0.45
 AREA_OF_INTEREST = (0.15, 0.85, 0.15, 0.85)  # (x0_ratio, x1_ratio, y0_ratio, y1_ratio)
 CLOSE_WIRING_MASK = (0.55, 0.40)  # Known camera artifact region in left lower corner: (y_start_ratio, x_end_ratio)
