@@ -6,7 +6,11 @@ import cv2
 import numpy as np
 import requests
 from src.schemas import DepthHazard
-from src.vision import DepthEstimator, analyze_depth_hazard
+from src.vision import (
+    DepthEstimator,
+    analyze_depth_hazard,
+    aruco_marker_points
+)
 
 from src.config import (
     AREA_OF_INTEREST,
@@ -26,12 +30,62 @@ aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(aruco_dict, params)
 
+def analyze_image_for_aruco(frame: np.ndarray) -> tuple[bool, float, float, int | None]:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    corners, ids, rejected = detector.detectMarkers(gray)
+    if ids is not None and len(ids) > 0:
+        marker_id = int(ids[0][0])
+        marker_corners = aruco_marker_points(corners[0])
+        marker_center_x = np.mean(marker_corners[:, 0])  # Average x of the 4 corners
+        image_center_x = frame.shape[1] / 2
+        x_offset = (marker_center_x - image_center_x) / image_center_x  # Normalize to [-1, 1]
+        area = cv2.contourArea(marker_corners) / (frame.shape[0] * frame.shape[1])  # Relative area
+        return True, x_offset, area, marker_id
+    else:
+        return False, 0.0, 0.0, None
 
 def estimate_depth_hazard(frame: np.ndarray) -> tuple[np.ndarray, DepthHazard, dict]:
     depth_frame = depth_estimator.estimate(frame)
     hazard = analyze_depth_hazard(depth_frame)
     debug = build_simple_depth_debug(depth_frame, hazard)
     return depth_frame, hazard, debug
+
+
+def draw_center_x_debug(frame: np.ndarray, corners: list[np.ndarray] | tuple[np.ndarray, ...]) -> None:
+    height, width = frame.shape[:2]
+    image_center_x = width // 2
+
+    cv2.line(frame, (image_center_x, 0), (image_center_x, height), (0, 255, 0), 2)
+    cv2.putText(
+        frame,
+        f"image x={image_center_x}",
+        (image_center_x + 8, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA,
+    )
+
+    if not corners:
+        return
+
+    marker_points = aruco_marker_points(corners[0])
+    marker_center_x = int(round(float(np.mean(marker_points[:, 0]))))
+    marker_center_y = int(round(float(np.mean(marker_points[:, 1]))))
+
+    cv2.line(frame, (marker_center_x, 0), (marker_center_x, height), (255, 0, 255), 2)
+    cv2.circle(frame, (marker_center_x, marker_center_y), 6, (255, 0, 255), -1)
+    cv2.putText(
+        frame,
+        f"marker x={marker_center_x}",
+        (marker_center_x + 8, max(marker_center_y - 12, 48)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 0, 255),
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def build_simple_depth_debug(depth_map: np.ndarray, hazard: DepthHazard) -> dict:
@@ -70,14 +124,14 @@ def build_simple_depth_debug(depth_map: np.ndarray, hazard: DepthHazard) -> dict
 
 def log_depth_hazard(frame: np.ndarray) -> None:
     _, hazard, debug = estimate_depth_hazard(frame)
+    _, x_offset, area, marker_id = analyze_image_for_aruco(frame)
     logging.info(
-        "[DEPTH] blocked=%s, q90=%.3f, scores=(left=%.3f, center=%.3f, right=%.3f), recommended_turn=%s",
+        "[DEPTH] blocked=%s, depth_score=%.3f, x_offset=%.3f, area=%.3f, marker_id=%s",
         hazard.blocked,
-        debug.get("q90", 0.0),
-        hazard.left_score,
-        hazard.center_score,
-        hazard.right_score,
-        hazard.recommended_turn,
+        hazard.depth_score,
+        x_offset,
+        area,
+        marker_id
     )
 
 def visualize_depth_hazard(frame: np.ndarray) -> np.ndarray:
@@ -149,7 +203,10 @@ def process_frame(frame: np.ndarray) -> np.ndarray:
     corners, ids, rejected = detector.detectMarkers(gray)
     if ids is not None:
         cv2.aruco.drawDetectedMarkers(visualized, corners, ids)
+        draw_center_x_debug(visualized, corners)
         # print("Detected ids:", ids.flatten().tolist())
+    else:
+        draw_center_x_debug(visualized, [])
     return visualized
 
 def try_opencv_stream(url: str) -> cv2.VideoCapture | None:

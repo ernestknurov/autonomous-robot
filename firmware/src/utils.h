@@ -10,3 +10,9 @@ void ultrasonic_init();
 void ultrasonic_update();  // Call every loop to check distance periodically
 float getDistance();       // Get distance in cm
 bool isObstacleDetected(); // Check if obstacle is too close
+
+// Buzzer
+void buzzer_init();
+void buzzer_update();       // Call every loop to advance melody playback
+void playMissionCompleteSound();
+bool buzzer_busy();

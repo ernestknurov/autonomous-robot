@@ -25,6 +25,7 @@ void setup() {
   ultrasonic_init();
   wifi_init();
   motors_init();
+  buzzer_init();
   
   Serial.println("ESP32 Robot Ready!");
 }
@@ -32,6 +33,7 @@ void setup() {
 void loop() {
   ultrasonic_update();  // Check distance every 20ms
   motors_update();      // Handle non-blocking motor timing
+  buzzer_update();      // Advance non-blocking melody playback
   
   // Check if motors just completed and broadcast DONE
   if (motors_just_completed()) {
@@ -40,4 +42,3 @@ void loop() {
   
   wifi_poll();           // Handle WiFi client connections and commands
 }
-

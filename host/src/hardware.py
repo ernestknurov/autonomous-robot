@@ -3,10 +3,10 @@ import cv2
 import time
 import socket
 import numpy as np
-from src.vision import Vision
+from src.vision import Vision, aruco_marker_points
 from src.logger_factory import get_logger
 from src.schemas import SensorSnapshot, MarkerDetection
-from src.config import VISION_RESOLUTION, MAX_MOVE_M, MAX_TURN_DEG, DEFAULT_COMMAND_TIMEOUT_S, GET_DISTANCE_TIMEOUT_S     
+from src.config import MAX_MOVE_M, MAX_TURN_DEG, DEFAULT_COMMAND_TIMEOUT_S, GET_DISTANCE_TIMEOUT_S     
 
 logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="INFO")
 
@@ -39,8 +39,8 @@ class RobotHardware:
         - result of ArUco / YOLO detection
         Note: for now we allow only one Aruco marker to be detected.
         """
-        # Shapes:
-        # bbox: (N, 4, 2). Each detection has a bounding box with 4 corners and (x, y) coordinates.
+        # Shapes from OpenCV ArUco:
+        # bbox: sequence of (1, 4, 2) arrays, one per detected marker.
         # ids: (N, 1). Each detection has an integer ID.
         frame = self.vision.get_frame()
         bbox, ids = self.vision.detect_markers(frame)
@@ -50,12 +50,12 @@ class RobotHardware:
         corners, marker_id = None, None
 
         if marker_found:
-            corners = bbox[0]  # shape (4, 2)
+            corners = aruco_marker_points(bbox[0])
             marker_id = int(ids[0][0])
             marker_center_x = np.mean(corners[:, 0])  # Average x of the 4 corners
-            image_center_x = VISION_RESOLUTION[0] / 2
+            image_center_x = frame.shape[1] / 2
             x_offset = (marker_center_x - image_center_x) / image_center_x  # Normalize to [-1, 1]
-            area = cv2.contourArea(corners[0]) / (VISION_RESOLUTION[0] * VISION_RESOLUTION[1])  # Relative area
+            area = cv2.contourArea(corners) / (frame.shape[0] * frame.shape[1])  # Relative area
 
         distance_to_obstacle = self.get_distance()
         depth_hazard = self.vision.estimate_depth_hazard(frame)
@@ -72,7 +72,7 @@ class RobotHardware:
             depth_hazard=depth_hazard,
         )
         logger.debug(
-            "[HARDWARE] Sensor snapshot: marker_id = %s, x_offset = %.3f, area = %.5f, distance = %.3f cm, depth_blocked = %s, depth_scores = (%.3f, %.3f, %.3f)",
+            "[HARDWARE] Sensor snapshot: marker_id = %s, x_offset = %.3f, area = %.5f, distance = %.3f cm, depth_blocked = %s, depth_score = %.3f",
             marker_id,
             x_offset,
             area,
@@ -97,6 +97,9 @@ class RobotHardware:
         
         distance = float(m.group(1))
         return distance
+    
+    def play_sound(self) -> None:
+        self.send_and_wait_done("PLAY_SOUND", timeout_s=DEFAULT_COMMAND_TIMEOUT_S)
     
     @measure_time
     def move_forward(self, distance: float = 0.3, timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S) -> str | None:

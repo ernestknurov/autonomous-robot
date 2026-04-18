@@ -17,6 +17,10 @@ from src.config import (
 logger = get_logger(__name__, log_file=f"logs/{__name__}.log", level="INFO")
 
 
+def aruco_marker_points(marker_corners: np.ndarray) -> np.ndarray:
+    return marker_corners.reshape(-1, 2)
+
+
 class DepthEstimator:
     def __init__(self, model_type="DPT_Hybrid", device: str | None = None):
         self.midas = torch.hub.load("intel-isl/MiDaS", model_type)

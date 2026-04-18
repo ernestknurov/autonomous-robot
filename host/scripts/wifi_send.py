@@ -60,8 +60,8 @@ def main():
         send_and_wait_done(sock, "GET_DISTANCE", timeout_s=2)
         time.sleep(pause)
 
-        send_and_wait_done(sock, "MOVE 1", timeout_s=10)
-        time.sleep(pause)
+        # send_and_wait_done(sock, "MOVE 1", timeout_s=10)
+        # time.sleep(pause)
         # send_and_wait_done(sock, "MOVE -1", timeout_s=10)
         # time.sleep(pause)
 
@@ -69,6 +69,10 @@ def main():
         # time.sleep(pause)
         # send_and_wait_done(sock, "TURN -90", timeout_s=10)
         # time.sleep(pause)
+
+        send_and_wait_done(sock, "PLAY_SOUND", timeout_s=10)
+        time.sleep(pause)
+
         
         # Uncomment to test movement commands
         # for _ in range(3):

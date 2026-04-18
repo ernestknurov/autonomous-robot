@@ -18,6 +18,7 @@ constexpr int IN1 = 33;   // left motor forward
 constexpr int IN2 = 25;   // left motor backward
 constexpr int IN3 = 26;   // right motor forward
 constexpr int IN4 = 27;   // right motor backward
+constexpr int BUZZER = 13; // buzzer pin
 
 // LED (ESP32 built-in LED is typically on GPIO 2)
 #ifndef LED_BUILTIN

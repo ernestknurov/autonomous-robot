@@ -120,6 +120,11 @@ Command parse_command(const String& raw) {
     return c;
   }
 
+  if (keyword == "PLAY_SOUND") {
+    c.type = CommandType::PLAY_SOUND;
+    return c;
+  }
+
   if (keyword == "MOVE") {
     float meters = 0.0f;
     if (!parse_signed_float(arg, meters)) {
@@ -179,6 +184,12 @@ void execute_command(const Command& c, int clientIndex) {
       break;
     }
 
+    case CommandType::PLAY_SOUND:
+      playMissionCompleteSound();
+      printToClient("OK: PLAY SOUND", clientIndex);
+      printToClient("DONE", clientIndex);
+      break;
+
     case CommandType::MOVE: {
       float m = c.meters;
       String msg = "OK: MOVE " + String(m, 3);
@@ -231,4 +242,3 @@ void handle_command(const String& raw, int clientIndex) {
   Command c = parse_command(raw);
   execute_command(c, clientIndex);
 }
-

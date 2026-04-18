@@ -8,6 +8,7 @@ enum class CommandType : uint8_t {
   MOVE,   // signed float meters
   TURN,   // signed int degrees
   GET_DISTANCE,
+  PLAY_SOUND,
   UNKNOWN
 };
 
@@ -28,4 +29,3 @@ void execute_command(const Command& c, int clientIndex = -1);
 
 // Convenience: parse + execute in one call.
 void handle_command(const String& raw, int clientIndex = -1);
-

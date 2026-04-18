@@ -12,6 +12,7 @@ This project demonstrates a distributed robotics system where:
 The robot autonomously searches for visual markers, approaches them while avoiding obstacles, and executes commands received from the host computer.
 
 ![Robot](assets/images/robot.jpg)
+*Robot picture (without buzzer module)*
 
 ## Hardware Architecture
 
@@ -60,6 +61,11 @@ The robot autonomously searches for visual markers, approaches them while avoidi
   - Wireless connection on home network
   - Transmits video to host computer for ArUco marker detection and depth hazard estimation
 
+#### Sound
+- **Passive Buzzer Module**
+  - Produce audio predefined in code.
+  - Control Pin: GPIO 13
+
 Example depth hazard visualization:
 
 ![Depth Estimation Example](assets/images/depth_estimation_2.png)
@@ -75,6 +81,7 @@ Battery (7.2V)
         └─ ESP32 (via USB-C)
             ├─ GPIO 32 (HC-SR04 TRIG)
             ├─ GPIO 35 (HC-SR04 ECHO via voltage divider)
+            ├─ GPIO 13 (Passive Buzzer Module)
             └─ GPIO 18,19,21,22 (Motor Driver IN1-IN4)
 
 HC-SR04 Ultrasonic Sensor
@@ -127,6 +134,7 @@ HOST → ESP32:
   MOVE <distance_m>      # Move forward (positive) or backward (negative)
   TURN <degrees>         # Turn left (negative) or right (positive)
   GET_DISTANCE           # Query obstacle distance
+  PLAY_SOUND             # Play melody using passive buzzer module
   
 ESP32 → HOST:
   DONE                   # Command execution complete
@@ -246,6 +254,7 @@ autonomous-robot/
 - 2× gear motors
 - HC-SR04 ultrasonic sensor
 - DC-DC step-down converter
+- Passive buzzer module
 - Android phone with IPWebcam app
 - Home WiFi network
 
@@ -324,7 +333,7 @@ Key tunable parameters in `host/src/robot.py`:
 - `marker_center_tolerance` - Acceptable marker centering error (default: 0.1)
 - `marker_close_area_threshold` - Marker area to consider "reached" (default: 0.025)
 - `default_step_distance` - Movement distance per action (default: 1.0 m)
-- `default_turn_degree` - Rotation angle per action (default: 40°)
+- `default_turn_degree` - Rotation angle per action (default: 60°)
 
 Depth estimator and hazard parameters in `host/src/config.py`:
 

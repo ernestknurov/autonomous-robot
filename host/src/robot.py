@@ -168,10 +168,10 @@ class ObjectHunterRobot:
         elif self.state == RobotState.LOST_TARGET:
             self._handle_lost_target(snapshot)
         elif self.state == RobotState.FINISHED:
-            logger.info("[ROBOT] In FINISHED state, stopping robot")
-            self.stop()
+            self._handle_finished(snapshot)
         else:
             logger.warning("[ROBOT] Unknown state: %s", self.state)
+
 
     def is_robot_stuck(self, n: int = 3, tolerance: float = 0.03) -> bool:
         """
@@ -202,11 +202,12 @@ class ObjectHunterRobot:
         action_str = prev_action if prev_action is not None else "N/A"
         obs_str = f"{snapshot.obstacle_distance_cm:.0f}" if snapshot.obstacle_distance_cm is not None else "N/A"
         depth_str = f"{snapshot.depth_hazard.depth_score:.3f}" if snapshot.depth_hazard.depth_score is not None else "N/A"
+        offset_str = f"{snapshot.marker.x_offset:.3f}" if snapshot.marker.x_offset is not None else "N/A"
 
         # logger.info(f"[ROBOT] ep = {self.episode_id} | iter = {self.iteration} | prev_iter_time = {prev_iter_time} | state = {self.state.value} | prev_action = {prev_action} | marker_area = {snapshot.marker.area} | depth_scores = (left: {snapshot.depth_hazard.left_score:.3f}, center: {snapshot.depth_hazard.center_score:.3f}, right: {snapshot.depth_hazard.right_score:.3f}) | obstacle_distance_cm = {snapshot.obstacle_distance_cm}")
-        logger.info("[ROBOT] ep=%s | iter=%d | time=%s | state=%s | action=%s | marker=%.3f | depth=%s | obs=%scm",
+        logger.info("[ROBOT] ep=%s | iter=%d | time=%s | state=%s | action=%s | marker=%.3f | offset=%s | depth=%s | obs=%scm",
             self.episode_id, self.iteration, time_str, 
-            self.state.value, action_str, snapshot.marker.area,
+            self.state.value, action_str, snapshot.marker.area, offset_str,
             depth_str, obs_str)
         
         self.episode_log.steps.append(TransitionRecord(
@@ -237,6 +238,13 @@ class ObjectHunterRobot:
             self.episode_log.steps[-1].outcome = StepOutcome(terminal=self._finished, next_state=self.state.value)
             if self._finished:
                 self.episode_log.metadata.finished_at = time.time()
+
+
+    def _handle_finished(self, snapshot: SensorSnapshot) -> None:
+        logger.info("[ROBOT] Target reached, stopping robot")
+        self.hw.play_sound()  # Celebrate by playing a sound
+        self.stop()
+
 
     def _handle_search(self, snapshot: SensorSnapshot) -> None:
         """
@@ -288,9 +296,9 @@ class ObjectHunterRobot:
             return
 
         if self.memory.last_scan_direction == 1:
-            self.hw.turn_right(degrees=self.default_turn_degree * 1.5) # 1.5 instead of 2 to adjust for overshoot
+            self.hw.turn_right(degrees=int(self.default_turn_degree * 1.5)) # 1.5 instead of 2 to adjust for overshoot
             self.memory.last_scan_direction = 2
-            self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": self.default_turn_degree * 1.5}))
+            self._log_action(action_command=ActionCommand(name="turn_right", parameters={"degrees": int(self.default_turn_degree * 1.5)}))
             return
 
         # Finish scan, return to original orientation if needed, and go back to SEARCH
