@@ -10,6 +10,26 @@ import pandas as pd
 OBSTACLE_DETECTION_THRESHOLD_CM = 100.0
 
 
+def _normalize_bool_series(series: pd.Series, fallback: bool = False) -> pd.Series:
+    """Normalize CSV bools that may arrive as bools, strings, numbers, or blanks."""
+    normalized = series.astype(str).str.lower().map(
+        {
+            "true": True,
+            "1": True,
+            "1.0": True,
+            "yes": True,
+            "false": False,
+            "0": False,
+            "0.0": False,
+            "no": False,
+            "nan": pd.NA,
+            "none": pd.NA,
+            "": pd.NA,
+        }
+    )
+    return normalized.fillna(fallback).astype(bool)
+
+
 def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize legacy and preprocessed CSV schemas into one shape."""
     df = df.copy()
@@ -20,6 +40,8 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "obs_marker_visible": "marker_visible",
         "obs_marker_x_offset": "marker_x_offset",
         "obs_marker_area": "marker_area",
+        "obs_depth_blocked": "depth_blocked",
+        "obs_depth_score": "depth_score",
         "action_param_distance": "parameters_distance",
         "action_param_degrees": "parameters_degrees",
         "nest_state": "next_state",
@@ -48,6 +70,8 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         ("obstacle_distance", pd.NA),
         ("marker_x_offset", 0.0),
         ("marker_area", 0.0),
+        ("depth_blocked", False),
+        ("depth_score", pd.NA),
     ):
         if column not in df.columns:
             next_column = f"next_obs_{column}"
@@ -60,12 +84,12 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df["state"] = "unknown"
 
     df["duration"] = pd.to_numeric(df["duration"], errors="coerce").fillna(0.0)
-    df["marker_visible"] = (
-        df["marker_visible"].astype(str).str.lower().map({"true": True, "false": False})
-    ).fillna(df["marker_visible"]).astype(bool)
+    df["marker_visible"] = _normalize_bool_series(df["marker_visible"])
+    df["depth_blocked"] = _normalize_bool_series(df["depth_blocked"])
     df["obstacle_distance"] = pd.to_numeric(df["obstacle_distance"], errors="coerce")
     df["marker_x_offset"] = pd.to_numeric(df["marker_x_offset"], errors="coerce")
     df["marker_area"] = pd.to_numeric(df["marker_area"], errors="coerce")
+    df["depth_score"] = pd.to_numeric(df["depth_score"], errors="coerce")
 
     return df
 
@@ -102,17 +126,60 @@ def extract_quality_metrics(csv_path: str) -> Dict:
         df["obstacle_distance"].notna()
         & (df["obstacle_distance"] < OBSTACLE_DETECTION_THRESHOLD_CM)
     ]
+    depth_events = df[df["depth_blocked"]]
+    any_obstacle_events = df[
+        (
+            df["obstacle_distance"].notna()
+            & (df["obstacle_distance"] < OBSTACLE_DETECTION_THRESHOLD_CM)
+        )
+        | df["depth_blocked"]
+    ]
     avoid_actions = df[df["state"] == "avoid"]
     obstacle_event_count = len(obstacle_events)
+    depth_event_count = len(depth_events)
+    any_obstacle_event_count = len(any_obstacle_events)
 
     metrics["obstacle_handling"] = {
-        "obstacles_encountered": obstacle_event_count,
+        "distance_obstacles_encountered": obstacle_event_count,
+        "depth_obstacles_encountered": depth_event_count,
+        "obstacles_encountered": any_obstacle_event_count,
         "avoidance_actions": len(avoid_actions),
         "closest_approach": obstacle_events["obstacle_distance"].min()
         if obstacle_event_count
         else None,
-        "obstacle_detection_rate": (obstacle_event_count / len(df)) * 100 if len(df) else 0.0,
+        "max_depth_score": df["depth_score"].max()
+        if df["depth_score"].notna().any()
+        else None,
+        "avg_depth_score": df["depth_score"].mean()
+        if df["depth_score"].notna().any()
+        else None,
+        "depth_block_rate": (depth_event_count / len(df)) * 100 if len(df) else 0.0,
+        "obstacle_detection_rate": (any_obstacle_event_count / len(df)) * 100
+        if len(df)
+        else 0.0,
     }
+
+    # === DEPTH SENSOR QUALITY ===
+    depth_frames = df[df["depth_score"].notna()]
+    if not depth_frames.empty:
+        distance_blocked = (
+            depth_frames["obstacle_distance"].notna()
+            & (depth_frames["obstacle_distance"] < OBSTACLE_DETECTION_THRESHOLD_CM)
+        )
+        depth_blocked = depth_frames["depth_blocked"]
+        metrics["depth_quality"] = {
+            "samples": len(depth_frames),
+            "blocked_samples": int(depth_blocked.sum()),
+            "max_depth_score": depth_frames["depth_score"].max(),
+            "avg_depth_score": depth_frames["depth_score"].mean(),
+            "depth_score_stability": depth_frames["depth_score"].std(),
+            "distance_depth_agreement_rate": (
+                (distance_blocked == depth_blocked).sum() / len(depth_frames)
+            )
+            * 100,
+            "depth_only_blocks": int((depth_blocked & ~distance_blocked).sum()),
+            "distance_only_blocks": int((distance_blocked & ~depth_blocked).sum()),
+        }
 
     # === VISION QUALITY ===
     if not detected_frames.empty:
@@ -190,13 +257,42 @@ def print_metrics(metrics: Dict):
     oh = metrics["obstacle_handling"]
     print(f"\nOBSTACLE HANDLING")
     print(f"  Obstacles encountered: {oh['obstacles_encountered']}")
+    print(f"  Distance obstacles: {oh['distance_obstacles_encountered']}")
+    print(f"  Depth obstacles: {oh['depth_obstacles_encountered']}")
     print(f"  Avoidance actions triggered: {oh['avoidance_actions']}")
     closest_approach = oh["closest_approach"]
     closest_approach_display = (
         f"{closest_approach:.2f}cm" if closest_approach is not None else "N/A"
     )
     print(f"  Closest approach: {closest_approach_display}")
+    max_depth_score = oh["max_depth_score"]
+    max_depth_score_display = (
+        f"{max_depth_score:.4f}" if max_depth_score is not None else "N/A"
+    )
+    avg_depth_score = oh["avg_depth_score"]
+    avg_depth_score_display = (
+        f"{avg_depth_score:.4f}" if avg_depth_score is not None else "N/A"
+    )
+    print(f"  Max depth score: {max_depth_score_display}")
+    print(f"  Avg depth score: {avg_depth_score_display}")
+    print(f"  Depth block rate: {oh['depth_block_rate']:.1f}%")
     print(f"  Detection rate: {oh['obstacle_detection_rate']:.1f}%")
+
+    if "depth_quality" in metrics:
+        dq = metrics["depth_quality"]
+        print(f"\nDEPTH QUALITY")
+        print(f"  Samples: {dq['samples']}")
+        print(f"  Blocked samples: {dq['blocked_samples']}")
+        print(f"  Max score: {dq['max_depth_score']:.4f}")
+        print(f"  Avg score: {dq['avg_depth_score']:.4f}")
+        depth_stability = dq["depth_score_stability"]
+        depth_stability_display = (
+            f"{depth_stability:.4f}" if pd.notna(depth_stability) else "N/A"
+        )
+        print(f"  Score stability (sigma): {depth_stability_display}")
+        print(f"  Distance/depth agreement: {dq['distance_depth_agreement_rate']:.1f}%")
+        print(f"  Depth-only blocks: {dq['depth_only_blocks']}")
+        print(f"  Distance-only blocks: {dq['distance_only_blocks']}")
 
     if "vision_quality" in metrics:
         vq = metrics["vision_quality"]
@@ -236,7 +332,7 @@ if __name__ == "__main__":
         / "logs"
         / "episode_logs"
         / "processed"
-        / "ep1774692642_2026-03-28_11:10:53.csv"
+        / "ep1776500276_2026-04-18_10:20:22.csv"
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
